@@ -1,0 +1,25 @@
+- Performance: Game actions, card plays and score updates should happen with minimal delay.
+- Low Latency: Player actions and game-state updates should be reflected across all players with minimal delay.
+- Real-Time Synchronization: All players must see identical turns, round results and game outcomes.
+- Scalability: Support multiple concurrent rooms without performance degradation.
+- Reliability: Prevent game crashes, lost progress and unexpected interruptions.
+- Security: Protect player accounts, room access and game data.
+- Fairness: Ensure genuinely random card shuffling and prevent cheating.
+- Availability: Keep the game accessible with minimal downtime.
+- Usability: Provide a simple, intuitive and easy-to-use browser interface.
+- Compatibility: Support major browsers across desktop, tablet and mobile devices.
+- Recoverability: Allow players to reconnect after network disconnections and resume the ongoing game without losing progress, within a 1-minute timeout.
+- Responsiveness: Adapt the interface to different screen sizes and orientations.
+- Card Interaction: Support single-click to highlight, double-click to play, drag-and-drop to rearrange or play cards, and an auto-sort option to organize cards by suit.
+- Card Visibility: Clearly display each player's remaining card count while keeping their actual cards private.
+- Player Status Visibility: Visually mark the previous game's loser as the Joker and clearly display their current losing streak and assigned Ace.
+- Scoreboard: Provide a clear and easily accessible score table showing player rankings, points and game results.
+- Low Bandwidth Support: Work smoothly with slow or unstable internet connections.
+- Data Integrity: Maintain accurate scores, card counts, rankings and losing streaks.
+- Privacy: Never expose a player's private cards or personal information to other players.
+- Anti-Cheating: Prevent unauthorized moves, card manipulation and exploitation of game logic.
+- Maintainability: Keep the code modular and easy to update.
+- Auditability: Maintain logs of card plays, game outcomes and player actions.
+- Resource Efficiency: Minimize CPU, memory, battery and network consumption.
+- Accessibility: Provide readable text, clear cards and accessible controls.
+- Game State Consistency: Ensure all players see the same cards on the table, current player, valid moves, scores and game outcomes.

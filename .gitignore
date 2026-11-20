@@ -1,0 +1,28 @@
+# dependencies
+node_modules/
+
+# builds & reports
+dist/
+coverage/
+*.tsbuildinfo
+
+# env
+.env
+.env.*
+!.env.example
+# non-secret dev defaults (client: one player per browser tab)
+!.env.development
+
+# logs
+*.log
+npm-debug.log*
+
+# editors / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# Claude working files
+Claude outputs/

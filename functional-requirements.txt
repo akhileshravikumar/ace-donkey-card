@@ -1,0 +1,33 @@
+- Players can create or join a game lobby/room.
+- Each room supports a maximum of 7 players.
+- Players can choose their own display names.
+- Shuffle all 52 cards randomly before dealing.
+- Distribute cards equally among players, with remaining cards handled according to the game rules.
+- Each player can view only their own cards.
+- Players can single-click to highlight a card.
+- Players can double-click to play a card.
+- Players can drag and drop cards to rearrange or play them.
+- Provide an auto-sort button to organize cards by suit.
+- Players can play only valid cards according to the game rules.
+- Highlight the player holding the Ace of Spades as the starting player.
+- The starting player can lead with any card.
+- Players must follow the suit led whenever possible.
+- Players can play any card only when they do not have the required suit.
+- Track the highest-value card in every round.
+- If a player cuts the suit, the highest card wins the round and takes all cards on the table.
+- If all players follow the same suit, fold the cards on the table.
+- The player with the highest card starts the next round in either case.
+- Award the most points to the first player who finishes all their cards.
+- Track player rankings and scores.
+- Provide a give-up option for the last two remaining players.
+- Declare the last remaining player as the loser.
+- Assign the loser the Ace of Spades for the next game.
+- Deal the remaining cards equally among the other players.
+- Track each player's consecutive losses.
+- After 1 consecutive loss, assign the Ace of Spades.
+- After 2 consecutive losses, assign the Ace of Clubs.
+- After 3 consecutive losses, assign the Ace of Diamonds.
+- After 4 consecutive losses, assign the Ace of Hearts.
+- Reset a player's losing streak only when they win a game.
+- Preserve the game state and player progress when a player temporarily disconnects.
+- Synchronize card plays, turns, scores and round results across all players.

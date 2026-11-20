@@ -1,0 +1,50 @@
+FRONTEND
+- React: Browser-based user interface.
+- TypeScript: Type safety and maintainable code.
+- Vite: Fast development server and frontend build tool.
+- Tailwind CSS: Responsive styling and UI design.
+
+BACKEND
+- Node.js: Backend runtime.
+- Express.js: HTTP API and server framework.
+- TypeScript: Shared type safety across frontend and backend.
+- Socket.IO: Real-time multiplayer communication and room management.
+
+DATABASE
+- Supabase PostgreSQL: Store player information, game history, scores,
+  rankings and losing streaks.
+
+COLLABORATIVE DEVELOPMENT
+- GitHub Free: Shared private repository and version control.
+- GitHub Projects: Task management and Kanban board.
+- GitHub Issues: Bug tracking and feature requests.
+- GitHub Pull Requests: Code review and merging changes.
+- Visual Studio Code: Code editor for both teammates.
+- VS Code Live Share: Optional real-time collaborative editing.
+
+HOSTING (FREE TIERS)
+- Render Static Sites: Host the React frontend.
+- Render Web Services: Host the Node.js and Socket.IO backend.
+- Supabase Free Plan: Host the PostgreSQL database.
+
+RECOMMENDED DEVELOPMENT WORKFLOW
+- Maintain one shared GitHub repository.
+- Use separate branches for each teammate's work.
+- Use pull requests before merging changes.
+- Track tasks using GitHub Projects.
+- Deploy the frontend and backend through Render.
+- Use Supabase for persistent database storage.
+
+COST
+- React, TypeScript, Vite, Tailwind CSS: Free.
+- Node.js, Express.js, Socket.IO: Free.
+- GitHub and VS Code: Free plans.
+- Render: Free hosting tier.
+- Supabase: Free database tier.
+
+NOTE
+- Free hosting tiers have usage limits.
+- Render free backend services may sleep when inactive.
+- Supabase free projects may pause after inactivity.
+- Free hosting is suitable for development, testing and small-scale use.
+- Paid hosting may eventually be required for an always-available public game.
