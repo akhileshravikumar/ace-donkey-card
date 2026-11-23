@@ -100,9 +100,9 @@ export function registerHandlers(
       error: { code: 'ALREADY_IN_ROOM' as const, message: 'Leave your current room first' },
     };
 
-    on('room:create', ({ name }) => {
+    on('room:create', ({ name, avatar }) => {
       if (current()) return alreadyInRoom;
-      const result = manager.create(name, socket.id);
+      const result = manager.create(name, socket.id, avatar);
       if (!result.ok) return result;
       socket.data.roomCode = result.roomCode;
       socket.data.playerId = result.playerId;
@@ -115,12 +115,13 @@ export function registerHandlers(
       };
     });
 
-    on('room:join', ({ code, name }) => {
+    on('room:join', ({ code, name, avatar }) => {
       if (current()) return alreadyInRoom;
-      const result = manager.join(code, name, socket.id);
+      const result = manager.join(code, name, socket.id, avatar);
       if (!result.ok) return result;
       socket.data.roomCode = result.roomCode;
       socket.data.playerId = result.playerId;
+      socket.emit('chat:history', result.room.chat);
       log.info({ room: result.roomCode, player: result.playerId }, 'joined');
       return {
         ok: true,
@@ -143,6 +144,7 @@ export function registerHandlers(
       }
       socket.data.roomCode = result.roomCode;
       socket.data.playerId = result.playerId;
+      socket.emit('chat:history', result.room.chat);
       log.info({ room: result.roomCode, player: result.playerId }, 'resumed');
       return {
         ok: true,
@@ -162,6 +164,49 @@ export function registerHandlers(
       return { ok: true };
     });
 
+    on('room:reorder', ({ order }) => {
+      const ctx = current();
+      return ctx ? ctx.room.reorder(ctx.playerId, order) : notInRoom;
+    });
+
+    /** End another socket's session (kicked) so it stops acting for that player. */
+    const endSession = (socketId: string, reason: 'kicked') => {
+      const target = io.sockets.sockets.get(socketId);
+      if (!target) return;
+      target.emit('session:ended', { reason });
+      target.data.roomCode = undefined;
+      target.data.playerId = undefined;
+    };
+
+    on('room:kick', ({ playerId }) => {
+      const ctx = current();
+      if (!ctx) return notInRoom;
+      const result = manager.kick(ctx.room.code, ctx.playerId, playerId);
+      if (!result.ok) return result;
+      if (result.socketId) endSession(result.socketId, 'kicked');
+      return { ok: true };
+    });
+
+    on('room:setHost', ({ playerId }) => {
+      const ctx = current();
+      return ctx ? ctx.room.setHost(ctx.playerId, playerId) : notInRoom;
+    });
+
+    on('player:avatar', ({ avatar }) => {
+      const ctx = current();
+      return ctx ? ctx.room.setAvatar(ctx.playerId, avatar) : notInRoom;
+    });
+
+    on('chat:send', ({ text }) => {
+      const ctx = current();
+      if (!ctx) return notInRoom;
+      const message = ctx.room.addChat(ctx.playerId, text);
+      if (!message) return notInRoom;
+      for (const p of ctx.room.players)
+        if (p.socketId) io.to(p.socketId).emit('chat:message', message);
+      return { ok: true };
+    });
+
     on('game:start', () => {
       const ctx = current();
       return ctx ? ctx.room.startGame(ctx.playerId) : notInRoom;
@@ -177,6 +222,11 @@ export function registerHandlers(
       return ctx ? ctx.room.giveUp(ctx.playerId, actionId) : notInRoom;
     });
 
+    on('game:take', ({ actionId }) => {
+      const ctx = current();
+      return ctx ? ctx.room.take(ctx.playerId, actionId) : notInRoom;
+    });
+
     on('state:sync', () => {
       const ctx = current();
       if (!ctx) return notInRoom;
@@ -185,6 +235,7 @@ export function registerHandlers(
         room: ctx.room.view(ctx.playerId),
         events: [],
       });
+      socket.emit('chat:history', ctx.room.chat);
       return { ok: true };
     });
 

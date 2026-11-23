@@ -79,6 +79,105 @@ describe('R5 cut', () => {
   });
 });
 
+describe('R5a take cards', () => {
+  // P1 leads 5H, P2 follows KH, P3 cuts with 4S: P2 has to take.
+  const s = stateWith({ P1: ['5H', '2C'], P2: ['KH', '3C'], P3: ['4S', '9D'], P4: ['6H', '7C'] });
+  const cut = playAll(
+    s,
+    [
+      ['P1', '5H'],
+      ['P2', 'KH'],
+      ['P3', '4S'],
+    ],
+    { take: false },
+  );
+
+  it('keeps every card on the table until the picker takes them', () => {
+    expect(cut.state.table.map((t) => t.card)).toEqual(['5H', 'KH', '4S']);
+    expect(cut.state.pendingCut).toEqual({ cutBy: 'P3', pickerId: 'P2' });
+    expect(cut.state.turn).toBe('P2');
+    expect(cut.events.at(-1)).toEqual({ type: 'cutPending', cutBy: 'P3', pickerId: 'P2' });
+    expect(cut.events.some((e) => e.type === 'roundCut')).toBe(false);
+  });
+
+  it('lets nobody play until then, and only the picker can take', () => {
+    for (const [id, card] of [
+      ['P4', '6H'],
+      ['P2', '3C'],
+    ] as const) {
+      const r = play(cut.state, id, card);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error.code).toBe('TAKE_CARDS_FIRST');
+    }
+    const wrong = applyAction(cut.state, { type: 'take', playerId: 'P1' });
+    expect(wrong.ok).toBe(false);
+    if (!wrong.ok) expect(wrong.error.code).toBe('NOTHING_TO_TAKE');
+    const none = applyAction(s, { type: 'take', playerId: 'P1' });
+    expect(none.ok).toBe(false);
+  });
+
+  it('taking resolves the cut: the picker picks up and leads', () => {
+    const r = applyAction(cut.state, { type: 'take', playerId: 'P2' });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.state.pendingCut).toBeNull();
+    expect(r.state.table).toEqual([]);
+    expect(r.state.hands.P2).toEqual(['3C', '5H', 'KH', '4S']);
+    expect(r.state.turn).toBe('P2');
+    expect(r.state.roundNo).toBe(2);
+    expect(r.events[0]).toMatchObject({ type: 'roundCut', pickedUpBy: 'P2', nextLeader: 'P2' });
+  });
+
+  it('a cutter who played their last card only finishes once the cards are taken', () => {
+    const last = stateWith({ P1: ['5H', '2C'], P2: ['KH', '3C'], P3: ['4S'], P4: ['6H', '7C'] });
+    const waiting = playAll(
+      last,
+      [
+        ['P1', '5H'],
+        ['P2', 'KH'],
+        ['P3', '4S'],
+      ],
+      { take: false },
+    ).state;
+    expect(waiting.status.P3).toBe('active');
+    const r = applyAction(waiting, { type: 'take', playerId: 'P2' });
+    expect(r.ok && r.state.status.P3).toBe('finished');
+  });
+
+  it('E2: if the picker is removed, the next-highest led-suit player still in takes', () => {
+    const r = applyAction(cut.state, { type: 'remove', playerId: 'P2' });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.state.pendingCut).toEqual({ cutBy: 'P3', pickerId: 'P1' });
+    expect(r.state.turn).toBe('P1');
+    expect(r.state.table).toHaveLength(3);
+  });
+
+  it('E2: with no led-suit player left, the cut cards are discarded and the cutter leads', () => {
+    const three = stateWith({ P1: ['5H', '2C'], P2: ['3S', '3C'], P3: ['9D', '8D'] });
+    const waiting = playAll(
+      three,
+      [
+        ['P1', '5H'],
+        ['P2', '3S'],
+      ],
+      { take: false },
+    ).state;
+    expect(waiting.pendingCut).toEqual({ cutBy: 'P2', pickerId: 'P1' });
+    const r = applyAction(waiting, { type: 'remove', playerId: 'P1' });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.state.pendingCut).toBeNull();
+    expect(r.state.discarded).toEqual(['5H', '3S']);
+    expect(r.state.turn).toBe('P2');
+  });
+
+  it('a removal of someone else keeps the cut waiting for the same picker', () => {
+    const r = applyAction(cut.state, { type: 'remove', playerId: 'P4' });
+    expect(r.ok && r.state.pendingCut).toEqual({ cutBy: 'P3', pickerId: 'P2' });
+  });
+});
+
 describe('R6 fold', () => {
   it('discards when everyone follows; the highest card leads', () => {
     const s = stateWith({ P1: ['5H', '2C'], P2: ['KH', '3C'], P3: ['9H', '4D'] });

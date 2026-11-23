@@ -1,44 +1,62 @@
 @import 'tailwindcss';
 
 /*
- * Temporary "basic UI" theme (dark). Semantic tokens so the Figma design can replace values in
- * one place: every component uses these names (bg-bg, bg-surface, text-muted, bg-felt, …),
- * never raw colours.
+ * Wireframe-pixel units, the same system as apps/home: `w-410` is 410 pixels of the 1920px-wide
+ * wireframe. --u scales one wireframe pixel to the screen (1px at 1920px wide, never below 0.6px).
+ * Everything is grey for now; colours come later, by changing the tokens below.
  */
 @theme {
-  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Inter, Roboto, ui-sans-serif,
+    sans-serif;
+  --font-code: 'SF Mono', 'SF Compact', ui-monospace, Menlo, Consolas, monospace;
 
-  --color-bg: #0b0f17;
-  --color-surface: #141a26;
-  --color-surface-2: #1c2433;
-  --color-line: #2a3446;
-  --color-fg: #e8edf5;
-  --color-muted: #94a3b8;
+  --spacing: var(--u);
 
-  --color-accent: #f5b942; /* turn, selection, primary actions */
-  --color-accent-fg: #1a1203;
-  --color-danger: #f87171;
-  --color-ok: #4ade80;
-  --color-joker: #c084fc;
+  --text-w14: calc(var(--u) * 14);
+  --text-w18: calc(var(--u) * 18);
+  --text-w20: calc(var(--u) * 20);
+  --text-w24: calc(var(--u) * 24);
+  --text-w26: calc(var(--u) * 26);
+  --text-w30: calc(var(--u) * 30);
+  --text-w40: calc(var(--u) * 40);
+  --text-w48: calc(var(--u) * 48);
+  --text-w56: calc(var(--u) * 56);
+  --text-w80: calc(var(--u) * 80);
 
-  --color-felt: #0f3b2e;
-  --color-felt-edge: #3b2a1a;
+  --radius-bar: calc(var(--u) * 50);
+  --radius-pill: calc(var(--u) * 25);
+  --radius-panel: calc(var(--u) * 40);
+  --radius-dialog: calc(var(--u) * 55);
+
+  --color-bar: #d9d9d9; /* header, pills, light buttons, table top */
+  --color-panel: #efefef; /* inner panels (rules, chat) */
+  --color-dialog: #c9c9c9; /* dialog frame */
+  --color-button: #333333; /* dark buttons */
+  --color-mid: #8c8c8c; /* small pills, card-count badges */
+  --color-shade: #6b6b6b; /* "you" row, podium blocks, table edge */
+  --color-remove: #c00000; /* host's remove-player ✕ */
 }
 
 @layer base {
-  html,
-  body,
-  #root {
-    min-height: 100%;
+  :root {
+    --u: clamp(0.6px, calc(100vw / 1920), 1px);
+    /* Avatar face colours, in the order of the Customize swatches (used by name, not as classes). */
+    --color-face-0: #cfcfcf;
+    --color-face-1: #bcbcbc;
+    --color-face-2: #a6a6a6;
+    --color-face-3: #929292;
+    --color-face-4: #7e7e7e;
+    --color-face-5: #6a6a6a;
   }
   body {
-    @apply bg-bg text-fg antialiased;
+    @apply bg-white font-sans text-black antialiased;
   }
   button:not(:disabled) {
     cursor: pointer;
   }
   :focus-visible {
-    outline: 2px solid var(--color-accent);
+    outline: 2px solid var(--color-button);
     outline-offset: 2px;
   }
 }

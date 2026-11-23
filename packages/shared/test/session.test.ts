@@ -3,6 +3,7 @@ import {
   applyAction,
   createGameFromHands,
   createSession,
+  forgetPlayer,
   recordGame,
   seededRng,
   startSessionGame,
@@ -100,5 +101,21 @@ describe('session scoring, streaks and the Joker', () => {
     expect(() =>
       recordGame(createSession(), stateWith({ P1: ['2C'], P2: ['3C'], P3: ['4C'] })),
     ).toThrow();
+  });
+});
+
+describe('forgetPlayer', () => {
+  it('drops the score, streak and Joker status of a player who left', () => {
+    const session: SessionState = {
+      ...createSession(),
+      scores: { P1: 5, P2: 3 },
+      streaks: { P1: 0, P2: 2 },
+      joker: { playerId: 'P2', streak: 2 },
+    };
+    const next = forgetPlayer(session, 'P2');
+    expect(next.scores).toEqual({ P1: 5 });
+    expect(next.streaks).toEqual({ P1: 0 });
+    expect(next.joker).toBeNull();
+    expect(forgetPlayer(session, 'P1').joker).toEqual({ playerId: 'P2', streak: 2 });
   });
 });

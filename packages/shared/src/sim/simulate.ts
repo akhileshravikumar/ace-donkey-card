@@ -24,9 +24,14 @@ export function simulateGame(
   while (!state.result) {
     if (moves++ > maxMoves) throw new Error('Simulation did not terminate');
     const player = state.turn!;
-    const options_ = playableCards(state, player);
-    const card = options_[rng(options_.length)]!;
-    const result = applyAction(state, { type: 'play', playerId: player, card });
+    let result;
+    if (state.pendingCut) {
+      result = applyAction(state, { type: 'take', playerId: player }); // R5a
+    } else {
+      const options_ = playableCards(state, player);
+      const card = options_[rng(options_.length)]!;
+      result = applyAction(state, { type: 'play', playerId: player, card });
+    }
     if (!result.ok) throw new Error(`Illegal move generated: ${result.error.message}`);
     state = result.state;
     events.push(...result.events);

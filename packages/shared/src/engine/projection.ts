@@ -3,8 +3,8 @@
  * their own hand plus public information (card counts, table, placings).
  */
 import type { CardId, Suit } from './cards';
-import { canGiveUp, playableCards } from './game';
-import type { GameResult, GameState, PlayerId, PlayerStatus, TablePlay } from './types';
+import { canGiveUp, mustTake, playableCards } from './game';
+import type { GameResult, GameState, PendingCut, PlayerId, PlayerStatus, TablePlay } from './types';
 
 export interface GamePlayerView {
   id: PlayerId;
@@ -19,6 +19,8 @@ export interface GameView {
   /** Cards the viewer may play right now (empty when it isn't their turn). */
   playable: CardId[];
   canGiveUp: boolean;
+  /** R5a: the viewer has to take the cards of a cut before play goes on. */
+  mustTake: boolean;
   players: GamePlayerView[];
   table: TablePlay[];
   ledSuit: Suit | null;
@@ -32,6 +34,8 @@ export interface GameView {
   starter: PlayerId;
   jokerId: PlayerId | null;
   jokerAces: CardId[];
+  /** R5a: a cut waiting for its picker to take the cards (table still shows them). */
+  pendingCut: PendingCut | null;
 }
 
 export function projectGame(state: GameState, viewer: PlayerId | null): GameView {
@@ -42,6 +46,7 @@ export function projectGame(state: GameState, viewer: PlayerId | null): GameView
     hand: you ? [...state.hands[you]!] : [],
     playable: you ? playableCards(state, you) : [],
     canGiveUp: you ? canGiveUp(state, you) : false,
+    mustTake: you ? mustTake(state, you) : false,
     players: state.seats.map((id) => ({
       id,
       cardCount: state.hands[id]!.length,
@@ -59,5 +64,6 @@ export function projectGame(state: GameState, viewer: PlayerId | null): GameView
     starter: state.starter,
     jokerId: state.jokerId,
     jokerAces: [...state.jokerAces],
+    pendingCut: state.pendingCut ? { ...state.pendingCut } : null,
   };
 }

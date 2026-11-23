@@ -17,6 +17,13 @@ Every rule has an ID; tests reference these IDs.
   | 3      | A♠ A♣ A♦                |
   | 4+     | A♠ A♣ A♦ A♥             |
 
+- **R2a. Dealing order.** The Joker is given their Aces first. The rest of the deck is then dealt
+  clockwise, one card per player per round, starting with the player after the Joker. The Joker
+  is **skipped for as many rounds as they hold Aces**; after that every player, the Joker
+  included, gets one card per round until the deck runs out. Example: 4 players, the Joker holds
+  3 Aces → the first 3 rounds go to the other three players only (9 cards), then everyone gets a
+  card each round; all hands end at 13. Any extra cards (when the deck doesn't divide evenly) go to
+  the first players after the Joker, so the Joker never gets one.
 - **R3. Starter.** The A♠ holder starts and may lead any card. After a loss that's always the Joker.
 
 ## Playing a round
@@ -24,6 +31,10 @@ Every rule has an ID; tests reference these IDs.
 - **R4. Follow suit.** Players must follow the led suit if they can; otherwise they may play any card.
 - **R5. Cut.** An off-suit card ends the round immediately. The player with the highest card **of
   the led suit** picks up every table card and leads the next round.
+- **R5a. Take cards.** After a cut, every card played that round stays on the table, visible to
+  everyone, until the player picking up presses **Take Cards**. Nobody can play in the meantime.
+  Players who emptied their hand that round (the cutter included) only finish once the cards are
+  taken.
 - **R6. Fold.** If every active player follows suit, the table cards are discarded permanently.
   The highest card's player leads next. If that player has run out, the **next-highest card** in
   that round leads, and so on.
@@ -56,14 +67,20 @@ Every rule has an ID; tests reference these IDs.
 ## Disconnects & removal
 
 - **R15. Grace period.** A disconnected player's seat is held for **60 s**. If it's their turn,
-  play waits.
+  play waits. Within those 60 s they can come back either automatically (same browser) or by
+  opening the invite link and joining with the **same name**: they get their seat, hand and score
+  back. A name that belongs to a connected player can't be used.
 - **R16. Removal.** After 60 s (or if the player leaves voluntarily) the player is removed and their
   hand is dealt round-robin to the remaining active players, starting with the next seat. A card
   they already played stays on the table. If it was their turn, the turn passes to the next seat.
-- **R17. Removed with 3+ players remaining.** 0 points for this game, streak resets to 0, earlier
-  games' points still count. They can rejoin for the next game.
-- **R18. Removal leaves only one player.** The **removed player is the loser** (streak +1, Joker
-  next game if they rejoin). The remaining player takes the last winning place.
+  They disappear from the table and the lobby.
+- **R17. Everything about them is forgotten.** A removed player gets 0 points for that game, and
+  their running score, losing streak and Joker status are dropped; they no longer appear on the
+  scoreboard. Past games still count for everyone else. If they join again later they are a brand
+  new player.
+- **R18. Removal leaves only one player.** For that game's result the **removed player is the
+  loser** and the remaining player takes the last winning place. As they've left (R17), there is no
+  Joker next game: the host deals.
 
 ## Room & identity
 
@@ -72,17 +89,38 @@ Every rule has an ID; tests reference these IDs.
   host passes on if they leave.
 - **R21. Identity.** Guests only: display name + random session token in localStorage. Streaks and
   scores are per room session.
+- **R22. Seating order.** The lobby list is the seating order, and it is also the dealing order and
+  the turn order (down the list, wrapping from the bottom back to the top). The host always sits at
+  the top; only the host can rearrange the other players, and only between games. New players join
+  at the bottom. If the host leaves, the next player in the order becomes host and moves to the top.
+  In the first game and after a draw (no Joker), the **host deals**: the player below the host gets
+  the first card and any extra cards go to the players right below the host.
+
+- **R23. Host controls.** The host can, at any time:
+  - **Remove** a player (red ✕ in the lobby). It works like Leave Room: they are out of the running
+    game at once (R16–R18), out of the room, and forgotten; they can join again as a new player.
+  - **Change host** to any connected player, who moves to the top of the seating order.
+- **R24. Chat.** Everyone in the room can chat during games (one room chat, up to 300 characters per
+  message). The chat lasts as long as the room; the last 100 messages are kept and sent to anyone
+  who joins or comes back.
+- **R25. Avatars & crowns.** Each player customizes an avatar: one of 6 face colours, 4 glasses
+  (small square, round, wide, none) and 3 mouths (teeth, O, straight); the eyes are always two
+  dots. It starts random and is remembered on that browser. The **spiky crown** marks the host. The
+  **dotted crown** marks the last game's loser — the Joker who receives the Aces (R2) — until
+  someone else loses or a draw resets it (R12).
 
 ## Engine edge decisions
 
 Cases the rules above don't cover, decided so the engine is total. Change them here first.
 
-- **E1. Joker absent.** If the Joker is not seated in the next game, that game is dealt normally
-  (no Aces assigned). Their streak is kept and counts if they lose later.
+- **E1. Joker absent.** If the Joker is not seated in the next game, that game is dealt by the host
+  (R22) with no Aces assigned. Their streak is kept and counts if they lose later.
 - **E2. Removed player's card decides a round.** A removed player's card stays on the table but
   they can never pick up or lead. In a cut, the highest led-suit card among remaining players picks
-  up; if none of them played the led suit, the table is discarded and the cutter leads.
+  up; if none of them played the led suit, the table is discarded and the cutter leads. If the
+  player who has to take the cards (R5a) is removed before taking them, the next-highest led-suit
+  player still in takes over; if there is none, the table is discarded and the cutter leads.
 - **E3. Removal completes a round.** If removing a player means every remaining active player has
   now played, the round resolves as a fold immediately.
-- **E4. Extra cards (R1).** When 52 doesn't divide evenly, which players receive the extra card is
-  chosen at random by the server.
+- **E4. Dealer with no Joker.** Superseded by R22: the host deals. (The engine only picks a
+  random starting seat if it is called without a dealer, e.g. in simulations.)

@@ -1,5 +1,5 @@
 /** Owns all rooms and the token → player index used for reconnecting. */
-import type { AckError, GameEvent, JoinedPayload, PlayerId } from '@ace/shared';
+import type { AckError, Avatar, GameEvent, JoinedPayload, PlayerId } from '@ace/shared';
 import type { AuditSink } from '../audit';
 import { hashToken, newPlayerId, newRoomCode, newToken } from '../security';
 import type { Rng } from '@ace/shared';
@@ -40,7 +40,7 @@ export class RoomManager {
     return this.rooms.get(code);
   }
 
-  create(name: string, socketId: string): JoinResult {
+  create(name: string, socketId: string, avatar?: Avatar): JoinResult {
     let code = newRoomCode();
     while (this.rooms.has(code)) code = newRoomCode();
     const room = new Room(code, {
@@ -49,29 +49,48 @@ export class RoomManager {
       graceMs: this.deps.graceMs,
       now: this.now,
       onChange: (r, events) => this.deps.onRoomChange(r, events),
+      onPlayerGone: (r, player) => {
+        this.tokens.delete(player.tokenHash);
+        if (r.players.length === 0) this.close(r);
+      },
     });
     this.rooms.set(code, room);
-    return this.addTo(room, name, socketId);
+    return this.addTo(room, name, socketId, avatar);
   }
 
-  join(code: string, name: string, socketId: string): JoinResult {
+  join(code: string, name: string, socketId: string, avatar?: Avatar): JoinResult {
     const room = this.rooms.get(code);
     if (!room) return fail('ROOM_NOT_FOUND', 'No room with that code');
-    if (room.nameTaken(name))
+    const existing = room.findByName(name);
+    if (existing) {
+      // R15: the same name within the grace period takes the disconnected player's seat back.
+      if (room.canReclaim(existing))
+        return this.reclaim(room, existing.id, existing.tokenHash, socketId);
       return fail('NAME_TAKEN', 'Someone in this room already uses that name');
+    }
     if (room.isFull()) return fail('ROOM_FULL', 'This room is full');
-    return this.addTo(room, name, socketId);
+    return this.addTo(room, name, socketId, avatar);
   }
 
-  private addTo(room: Room, name: string, socketId: string): JoinResult {
+  private reclaim(
+    room: Room,
+    playerId: PlayerId,
+    oldTokenHash: string,
+    socketId: string,
+  ): JoinResult {
+    const token = newToken();
+    const tokenHash = hashToken(token);
+    this.tokens.delete(oldTokenHash);
+    this.tokens.set(tokenHash, { code: room.code, playerId });
+    room.reclaim(playerId, tokenHash, socketId);
+    return { ok: true, room, roomCode: room.code, playerId, token };
+  }
+
+  private addTo(room: Room, name: string, socketId: string, avatar?: Avatar): JoinResult {
     const token = newToken();
     const tokenHash = hashToken(token);
     const playerId = newPlayerId();
-    // Forget tokens of anyone this join evicts.
-    const before = new Set(room.players.map((p) => p.tokenHash));
-    room.addPlayer({ id: playerId, name, tokenHash, socketId });
-    const after = new Set(room.players.map((p) => p.tokenHash));
-    for (const hash of before) if (!after.has(hash)) this.tokens.delete(hash);
+    room.addPlayer({ id: playerId, name, tokenHash, socketId, ...(avatar ? { avatar } : {}) });
     this.tokens.set(tokenHash, { code: room.code, playerId });
     return { ok: true, room, roomCode: room.code, playerId, token };
   }
@@ -94,6 +113,21 @@ export class RoomManager {
     this.tokens.delete(player.tokenHash);
     room.leave(playerId);
     if (room.players.length === 0) this.close(room);
+  }
+
+  /** R23: host removes a player. Returns the removed player's socket so it can be told. */
+  kick(
+    code: string,
+    by: PlayerId,
+    target: PlayerId,
+  ): { ok: true; socketId: string | null } | { ok: false; error: AckError } {
+    const room = this.rooms.get(code);
+    if (!room)
+      return { ok: false, error: { code: 'ROOM_NOT_FOUND', message: 'No room with that code' } };
+    const result = room.kick(by, target);
+    if (!result.ok) return result;
+    this.tokens.delete(result.player.tokenHash);
+    return { ok: true, socketId: result.player.socketId };
   }
 
   disconnect(code: string, playerId: PlayerId, socketId: string): void {

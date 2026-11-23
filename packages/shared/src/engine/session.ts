@@ -35,9 +35,17 @@ export function createSession(): SessionState {
   return { scores: {}, streaks: {}, joker: null, history: [] };
 }
 
-/** Deal the next game for these seats using the session's Joker (E1: ignored if not seated). */
-export function startSessionGame(session: SessionState, seats: PlayerId[], rng: Rng): GameState {
-  return createGame({ seats, joker: session.joker, rng });
+/**
+ * Deal the next game. `seats` is the seating order (R22). The Joker's seat starts the deal
+ * (R2a); with no Joker (or Joker not seated, E1) the dealer — the host — deals.
+ */
+export function startSessionGame(
+  session: SessionState,
+  seats: PlayerId[],
+  rng: Rng,
+  dealerId: PlayerId | null = null,
+): GameState {
+  return createGame({ seats, joker: session.joker, dealerId, rng });
 }
 
 /** Apply a finished game's result to the session: scores, streaks and next Joker. */
@@ -83,4 +91,21 @@ export function recordGame(session: SessionState, game: GameState): SessionState
   };
 
   return { scores, streaks, joker, history: [...session.history, record] };
+}
+
+/**
+ * R17/R18: a player who left the room for good (timed out or left) is forgotten: their running
+ * score, losing streak and Joker status go. Past game records are kept for the other players.
+ */
+export function forgetPlayer(session: SessionState, playerId: PlayerId): SessionState {
+  const scores = { ...session.scores };
+  const streaks = { ...session.streaks };
+  delete scores[playerId];
+  delete streaks[playerId];
+  return {
+    ...session,
+    scores,
+    streaks,
+    joker: session.joker?.playerId === playerId ? null : session.joker,
+  };
 }

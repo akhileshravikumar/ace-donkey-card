@@ -1,10 +1,19 @@
 /**
- * Client state. All game state comes from the server (`room:update`); the only local state is UI
- * state: the player's own card arrangement, the highlighted card and messages.
+ * Client state. All game state comes from the server (`room:update`, chat events); local state is
+ * UI only: the player's card arrangement, the highlighted card, their avatar and messages.
  */
 import { createStore, type StoreApi } from 'zustand/vanilla';
-import type { CardId, PlayerId, RoomUpdate, RoomView, SessionEndReason } from '@ace/shared';
-import { describeEvent } from '../lib/describe';
+import type {
+  Avatar,
+  CardId,
+  ChatMessage,
+  PlayerId,
+  RoomUpdate,
+  RoomView,
+  SessionEndReason,
+} from '@ace/shared';
+import { CHAT_HISTORY } from '@ace/shared';
+import { loadAvatar, saveAvatar } from '../lib/avatar';
 import { mergeHandOrder, moveCard, sortBySuit } from '../lib/hand';
 import { type KeyValueStore, type StoredSession, loadSession, saveSession } from '../lib/storage';
 import type { ClientAck, Transport } from '../net/transport';
@@ -19,20 +28,34 @@ export interface GameStore {
   update: RoomUpdate | null;
   handOrder: CardId[];
   selected: CardId | null;
-  /** Latest human-readable messages, newest last. */
-  log: string[];
   error: string | null;
   notice: string | null;
   busy: boolean;
+  /** This player's avatar (sent when joining; changes are sent to the room). */
+  avatar: Avatar;
+  chat: ChatMessage[];
+  /** Number of the game whose results this player closed with "Back to lobby". */
+  resultsClosedFor: number | null;
 
   // actions
   createRoom(name: string): Promise<boolean>;
   joinRoom(code: string, name: string): Promise<boolean>;
   leaveRoom(): Promise<void>;
   startGame(): Promise<void>;
+  /** Host only, between games: new seating order (host first). */
+  reorderPlayers(order: PlayerId[]): Promise<boolean>;
+  /** Host only (R23). */
+  kickPlayer(playerId: PlayerId): Promise<boolean>;
+  setHost(playerId: PlayerId): Promise<boolean>;
+  setAvatar(avatar: Avatar): Promise<void>;
+  sendChat(text: string): Promise<boolean>;
+  /** Close the results overlay and go to the lobby. */
+  backToLobby(): void;
   playCard(card: CardId): Promise<boolean>;
   playSelected(): Promise<boolean>;
   giveUp(): Promise<void>;
+  /** R5a: take the cards of a cut you have to pick up. */
+  takeCards(): Promise<boolean>;
   select(card: CardId | null): void;
   moveSelection(delta: number): void;
   moveCard(card: CardId, toIndex: number): void;
@@ -40,12 +63,11 @@ export interface GameStore {
   clearError(): void;
 }
 
-const LOG_LIMIT = 30;
-
 const END_NOTICE: Record<SessionEndReason, string> = {
   left: 'You left the room.',
   replaced: 'This game was opened in another tab or window.',
   roomClosed: 'The room was closed.',
+  kicked: 'The host removed you from the room.',
 };
 
 let actionCounter = 0;
@@ -55,10 +77,6 @@ const newActionId = () =>
 /** Identifies which game a view belongs to (games started so far in this room). */
 function gameKey(room: RoomView): string {
   return `${room.code}:${room.history.length + (room.phase === 'playing' ? 1 : 0)}`;
-}
-
-export function nameLookup(room: RoomView | undefined) {
-  return (id: PlayerId) => room?.names[id] ?? 'Someone';
 }
 
 export function createGameStore(
@@ -78,7 +96,14 @@ export function createGameStore(
 
     const endSession = (notice: string | null) => {
       setSession(null);
-      set({ update: null, handOrder: [], selected: null, log: [], notice });
+      set({
+        update: null,
+        handOrder: [],
+        selected: null,
+        chat: [],
+        resultsClosedFor: null,
+        notice,
+      });
     };
 
     const enter = async (
@@ -86,10 +111,11 @@ export function createGameStore(
       payload: { name: string; code?: string },
     ): Promise<boolean> => {
       set({ busy: true, error: null, notice: null });
+      const avatar = get().avatar;
       const ack =
         event === 'room:create'
-          ? await transport.send('room:create', { name: payload.name })
-          : await transport.send('room:join', { code: payload.code!, name: payload.name });
+          ? await transport.send('room:create', { name: payload.name, avatar })
+          : await transport.send('room:join', { code: payload.code!, name: payload.name, avatar });
       set({ busy: false });
       if (!ack.ok) return fail(ack);
       setSession({ roomCode: ack.roomCode, playerId: ack.playerId, token: ack.token });
@@ -109,10 +135,12 @@ export function createGameStore(
       update: null,
       handOrder: [],
       selected: null,
-      log: [],
       error: null,
       notice: null,
       busy: false,
+      avatar: loadAvatar(storage),
+      chat: [],
+      resultsClosedFor: null,
 
       createRoom: (name) => enter('room:create', { name }),
       joinRoom: (code, name) => enter('room:join', { code, name }),
@@ -126,9 +154,42 @@ export function createGameStore(
         await gameAction(() => transport.send('game:start', {}));
       },
 
+      reorderPlayers(order) {
+        return gameAction(() => transport.send('room:reorder', { order }));
+      },
+
+      kickPlayer(playerId) {
+        return gameAction(() => transport.send('room:kick', { playerId }));
+      },
+
+      setHost(playerId) {
+        return gameAction(() => transport.send('room:setHost', { playerId }));
+      },
+
+      async setAvatar(avatar) {
+        saveAvatar(storage, avatar);
+        set({ avatar });
+        if (get().session) await gameAction(() => transport.send('player:avatar', { avatar }));
+      },
+
+      sendChat(text) {
+        if (!text.trim()) return Promise.resolve(false);
+        return gameAction(() => transport.send('chat:send', { text }));
+      },
+
+      backToLobby() {
+        set({ resultsClosedFor: get().update?.room.history.length ?? null });
+      },
+
       async playCard(card) {
         const game = get().update?.room.game;
         if (!game || game.you === null) return false;
+        if (game.pendingCut) {
+          set({
+            error: game.mustTake ? 'Take the cards first.' : 'Wait for the cut cards to be taken.',
+          });
+          return false;
+        }
         if (game.turn !== game.you) {
           set({ error: 'It is not your turn yet.' });
           return false;
@@ -155,6 +216,10 @@ export function createGameStore(
 
       async giveUp() {
         await gameAction(() => transport.send('game:giveUp', { actionId: newActionId() }));
+      },
+
+      takeCards() {
+        return gameAction(() => transport.send('game:take', { actionId: newActionId() }));
       },
 
       select(card) {
@@ -219,13 +284,10 @@ export function createGameStore(
       // A new deal starts from the server's order; within a game the player's arrangement is kept.
       const sameGame = state.update !== null && gameKey(state.update.room) === gameKey(update.room);
       const handOrder = mergeHandOrder(sameGame ? state.handOrder : [], hand);
-      const nameOf = nameLookup(update.room);
-      const messages = update.events.map((e) => describeEvent(e, nameOf));
       store.setState({
         update,
         handOrder,
         selected: state.selected && hand.includes(state.selected) ? state.selected : null,
-        log: [...state.log, ...messages].slice(-LOG_LIMIT),
       });
     },
     onSessionEnded(reason) {
@@ -235,9 +297,18 @@ export function createGameStore(
         update: null,
         handOrder: [],
         selected: null,
-        log: [],
+        chat: [],
+        resultsClosedFor: null,
         notice: END_NOTICE[reason],
       });
+    },
+    onChatMessage(message) {
+      const chat = store.getState().chat;
+      if (chat.some((m) => m.id === message.id)) return;
+      store.setState({ chat: [...chat, message].slice(-CHAT_HISTORY) });
+    },
+    onChatHistory(messages) {
+      store.setState({ chat: [...messages] });
     },
   });
 

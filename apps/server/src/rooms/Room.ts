@@ -4,7 +4,9 @@
  */
 import {
   type AckError,
+  type Avatar,
   type CardId,
+  type ChatMessage,
   type GameAction,
   type GameEvent,
   type GameState,
@@ -13,10 +15,13 @@ import {
   type RoomView,
   type Rng,
   type SessionState,
+  CHAT_HISTORY,
+  DEFAULT_AVATAR,
   MAX_PLAYERS,
   MIN_PLAYERS,
   applyAction,
   createSession,
+  forgetPlayer,
   projectGame,
   recordGame,
   startSessionGame,
@@ -33,6 +38,7 @@ export interface RoomPlayer {
   disconnectTimer: ReturnType<typeof setTimeout> | null;
   /** Recent actionIds, for idempotent retries. */
   recentActions: string[];
+  avatar: Avatar;
 }
 
 export type RoomResult = { ok: true; duplicate?: boolean } | { ok: false; error: AckError };
@@ -44,6 +50,8 @@ export interface RoomDeps {
   now?: () => number;
   /** Called after any change so the transport can broadcast fresh views. */
   onChange: (room: Room, events: GameEvent[]) => void;
+  /** Called when a player is gone for good (grace period over), so their token can be forgotten. */
+  onPlayerGone?: (room: Room, player: RoomPlayer) => void;
 }
 
 const err = (code: AckError['code'], message: string): RoomResult => ({
@@ -55,12 +63,15 @@ const RECENT_ACTIONS = 50;
 
 export class Room {
   readonly players: RoomPlayer[] = [];
-  /** Every name ever seated here, so history can still show players who left. */
+  /** Every name ever seated here, so past results can still name players who left. */
   readonly names: Record<PlayerId, string> = {};
   hostId: PlayerId | null = null;
   session: SessionState = createSession();
   game: GameState | null = null;
   version = 0;
+  /** Recent chat (R24), oldest first. */
+  readonly chat: ChatMessage[] = [];
+  private nextChatId = 1;
   lastActivity: number;
   private readonly now: () => number;
 
@@ -90,11 +101,16 @@ export class Room {
   }
 
   isFull(): boolean {
-    return this.players.length >= MAX_PLAYERS && !this.findEvictable();
+    return this.players.length >= MAX_PLAYERS;
   }
 
-  nameTaken(name: string): boolean {
-    return this.players.some((p) => p.name.toLowerCase() === name.toLowerCase());
+  findByName(name: string): RoomPlayer | undefined {
+    return this.players.find((p) => p.name.toLowerCase() === name.toLowerCase());
+  }
+
+  /** R15: a disconnected player still inside the grace period can take their seat back by name. */
+  canReclaim(p: RoomPlayer): boolean {
+    return !p.connected && p.disconnectTimer !== null;
   }
 
   view(viewer: PlayerId): RoomView {
@@ -114,6 +130,7 @@ export class Room {
         score: this.session.scores[p.id] ?? 0,
         streak: this.session.streaks[p.id] ?? 0,
         isJoker: p.id === joker,
+        avatar: p.avatar,
       })),
       names: { ...this.names },
       game: this.game ? projectGame(this.game, viewer) : null,
@@ -138,13 +155,16 @@ export class Room {
   // Membership
   // -------------------------------------------------------------------------------------------
 
-  addPlayer(player: { id: PlayerId; name: string; tokenHash: string; socketId: string }): void {
-    if (this.players.length >= MAX_PLAYERS) {
-      const evict = this.findEvictable();
-      if (evict) this.dropFromRoom(evict);
-    }
+  addPlayer(player: {
+    id: PlayerId;
+    name: string;
+    tokenHash: string;
+    socketId: string;
+    avatar?: Avatar;
+  }): void {
     this.players.push({
       ...player,
+      avatar: player.avatar ?? DEFAULT_AVATAR,
       connected: true,
       disconnectDeadline: null,
       disconnectTimer: null,
@@ -154,16 +174,6 @@ export class Room {
     this.hostId ??= player.id;
     this.touch();
     this.deps.onChange(this, []);
-  }
-
-  /**
-   * A player who has been disconnected past the grace period and isn't in a running game can be
-   * replaced by a new joiner when the room is full (oldest first).
-   */
-  private findEvictable(): RoomPlayer | undefined {
-    return this.players
-      .filter((p) => !p.connected && p.disconnectTimer === null && !this.isActiveInGame(p.id))
-      .sort((a, b) => (a.disconnectDeadline ?? 0) - (b.disconnectDeadline ?? 0))[0];
   }
 
   private isActiveInGame(id: PlayerId): boolean {
@@ -184,7 +194,19 @@ export class Room {
     this.deps.onChange(this, []);
   }
 
-  /** R15: hold the seat for the grace period, then remove from the game (R16–R18). */
+  /** R15: rejoining by name within the grace period — same seat and hand, new session token. */
+  reclaim(id: PlayerId, tokenHash: string, socketId: string): void {
+    const p = this.getPlayer(id);
+    if (!p) return;
+    p.tokenHash = tokenHash;
+    p.recentActions = [];
+    this.attach(id, socketId);
+  }
+
+  /**
+   * R15: hold the seat for the grace period. After that the player is removed from the game
+   * (R16–R18) and from the room, and everything about them is forgotten (R17).
+   */
   detach(id: PlayerId, socketId: string): void {
     const p = this.getPlayer(id);
     if (!p || p.socketId !== socketId) return;
@@ -203,7 +225,8 @@ export class Room {
     const events: GameEvent[] = [];
     if (this.isActiveInGame(id))
       events.push(...this.applyGameAction({ type: 'remove', playerId: id }, 'timeout'));
-    if (this.hostId === id) this.migrateHost();
+    this.dropFromRoom(p);
+    this.deps.onPlayerGone?.(this, p);
     this.deps.onChange(this, events);
   }
 
@@ -220,18 +243,127 @@ export class Room {
     return { ok: true };
   }
 
+  /** Remove a player from the room and forget their score, streak and Joker status (R17). */
   private dropFromRoom(p: RoomPlayer): void {
     if (p.disconnectTimer) clearTimeout(p.disconnectTimer);
     this.players.splice(this.players.indexOf(p), 1);
+    this.session = forgetPlayer(this.session, p.id);
     if (this.hostId === p.id) this.migrateHost();
   }
 
-  /** R20: host passes to the earliest-joined connected player (or anyone, if none connected). */
+  /**
+   * R20 + R22: host passes to the next connected player in seating order (or anyone, if none
+   * connected) and moves to the top of the order.
+   */
   private migrateHost(): void {
     const next =
       this.connectedPlayers.find((p) => p.id !== this.hostId) ??
       this.players.find((p) => p.id !== this.hostId);
     this.hostId = next?.id ?? null;
+    if (next) {
+      this.players.splice(this.players.indexOf(next), 1);
+      this.players.unshift(next);
+    }
+  }
+
+  /** R22: the host arranges the seating (= dealing and turn) order between games; host stays first. */
+  reorder(by: PlayerId, order: PlayerId[]): RoomResult {
+    if (by !== this.hostId) return err('NOT_HOST', 'Only the host can change the order');
+    if (this.phase === 'playing')
+      return err('GAME_IN_PROGRESS', 'The order can only change between games');
+    const ids = this.players.map((p) => p.id);
+    const valid =
+      order.length === ids.length &&
+      new Set(order).size === order.length &&
+      order.every((id) => ids.includes(id));
+    if (!valid) return err('INVALID_ORDER', 'The order must list every player in the room once');
+    if (order[0] !== this.hostId) return err('INVALID_ORDER', 'The host always sits at the top');
+    const byId = new Map(this.players.map((p) => [p.id, p]));
+    this.players.splice(0, this.players.length, ...order.map((id) => byId.get(id)!));
+    this.deps.audit.action({
+      room: this.code,
+      gameNo: this.gameNo,
+      actor: by,
+      action: 'reorder',
+      detail: { order },
+    });
+    this.touch();
+    this.deps.onChange(this, []);
+    return { ok: true };
+  }
+
+  /** R23: host removes a player (like a Leave). Returns the removed player so their session can end. */
+  kick(
+    by: PlayerId,
+    target: PlayerId,
+  ): { ok: true; player: RoomPlayer } | { ok: false; error: AckError } {
+    if (by !== this.hostId)
+      return {
+        ok: false,
+        error: { code: 'NOT_HOST', message: 'Only the host can remove players' },
+      };
+    if (target === by)
+      return { ok: false, error: { code: 'BAD_REQUEST', message: 'Use Leave Room to leave' } };
+    const p = this.getPlayer(target);
+    if (!p)
+      return { ok: false, error: { code: 'NOT_FOUND', message: 'That player is not in the room' } };
+    this.deps.audit.action({
+      room: this.code,
+      gameNo: this.gameNo,
+      actor: by,
+      action: 'kick',
+      detail: { target },
+    });
+    this.leave(target);
+    return { ok: true, player: p };
+  }
+
+  /** R23: host hands the host role to another connected player, who moves to the top (R22). */
+  setHost(by: PlayerId, target: PlayerId): RoomResult {
+    if (by !== this.hostId) return err('NOT_HOST', 'Only the host can change the host');
+    const next = this.getPlayer(target);
+    if (!next || target === by) return err('NOT_FOUND', 'Pick another player in the room');
+    if (!next.connected) return err('BAD_REQUEST', 'That player is not connected');
+    this.hostId = target;
+    this.players.splice(this.players.indexOf(next), 1);
+    this.players.unshift(next);
+    this.deps.audit.action({
+      room: this.code,
+      gameNo: this.gameNo,
+      actor: by,
+      action: 'setHost',
+      detail: { target },
+    });
+    this.touch();
+    this.deps.onChange(this, []);
+    return { ok: true };
+  }
+
+  /** R25: players can change their avatar at any time. */
+  setAvatar(by: PlayerId, avatar: Avatar): RoomResult {
+    const p = this.getPlayer(by);
+    if (!p) return err('NOT_IN_ROOM', 'You are not in this room');
+    p.avatar = { ...avatar };
+    this.touch();
+    this.deps.onChange(this, []);
+    return { ok: true };
+  }
+
+  /** R24: add a chat message (text already validated). Returns it for broadcasting. */
+  addChat(by: PlayerId, text: string): ChatMessage | null {
+    const p = this.getPlayer(by);
+    if (!p) return null;
+    const message: ChatMessage = {
+      id: this.nextChatId++,
+      playerId: by,
+      name: p.name,
+      text,
+      at: this.now(),
+    };
+    this.chat.push(message);
+    if (this.chat.length > CHAT_HISTORY) this.chat.shift();
+    this.touch();
+    return message;
   }
 
   // -------------------------------------------------------------------------------------------
@@ -243,7 +375,8 @@ export class Room {
     const blocker = this.startBlocker();
     if (blocker) return blocker;
     const seats = this.connectedPlayers.map((p) => p.id).slice(0, MAX_PLAYERS);
-    this.game = startSessionGame(this.session, seats, this.deps.rng);
+    // R22: seats follow the lobby order; the host deals when there's no Joker.
+    this.game = startSessionGame(this.session, seats, this.deps.rng, this.hostId);
     this.deps.audit.action({
       room: this.code,
       gameNo: this.gameNo,
@@ -262,6 +395,10 @@ export class Room {
 
   giveUp(by: PlayerId, actionId: string): RoomResult {
     return this.playerAction(by, actionId, { type: 'giveUp', playerId: by });
+  }
+
+  take(by: PlayerId, actionId: string): RoomResult {
+    return this.playerAction(by, actionId, { type: 'take', playerId: by });
   }
 
   private playerAction(by: PlayerId, actionId: string, action: GameAction): RoomResult {

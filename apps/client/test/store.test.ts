@@ -1,60 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import type { RoomUpdate, RoomView, GameView, CardId } from '@ace/shared';
+import {
+  CHAT_HISTORY,
+  type RoomUpdate,
+  type RoomView,
+  type GameView,
+  type CardId,
+} from '@ace/shared';
 import { createGameStore } from '../src/state/store';
-import type { ClientAck, Transport, TransportListeners } from '../src/net/transport';
-import type { KeyValueStore } from '../src/lib/storage';
-
-class FakeTransport implements Transport {
-  listeners!: TransportListeners;
-  sent: { event: string; payload: unknown }[] = [];
-  replies: Record<string, ClientAck<Record<string, unknown>>> = {};
-  connected = false;
-  connect(listeners: TransportListeners) {
-    this.listeners = listeners;
-  }
-  async send(event: string, payload: unknown) {
-    this.sent.push({ event, payload });
-    return (this.replies[event] ?? { ok: true }) as never;
-  }
-}
-
-function memoryStore(): KeyValueStore & { data: Map<string, string> } {
-  const data = new Map<string, string>();
-  return {
-    data,
-    getItem: (k) => data.get(k) ?? null,
-    setItem: (k, v) => void data.set(k, v),
-    removeItem: (k) => void data.delete(k),
-  };
-}
+import { FakeTransport, gameView, memoryStore } from './helpers';
 
 function update(
   version: number,
   game: Partial<GameView> | null,
   extra: Partial<RoomView> = {},
 ): RoomUpdate {
-  const fullGame: GameView | null = game
-    ? {
-        you: 'me',
-        hand: [],
-        playable: [],
-        canGiveUp: false,
-        players: [],
-        table: [],
-        ledSuit: null,
-        turn: 'me',
-        leader: 'me',
-        roundNo: 1,
-        discardedCount: 0,
-        placings: [],
-        loser: null,
-        result: null,
-        starter: 'me',
-        jokerId: null,
-        jokerAces: [],
-        ...game,
-      }
-    : null;
+  const fullGame: GameView | null = game ? gameView(game) : null;
   return {
     version,
     events: [],
@@ -114,7 +74,7 @@ describe('client store', () => {
     t.listeners.onConnect();
     await new Promise((r) => setTimeout(r, 0));
     expect(store.getState().session).toBeNull();
-    expect(storage.data.size).toBe(0);
+    expect(storage.data.has('ace-donkey.session')).toBe(false);
   });
 
   it('shows server errors from acks', async () => {
@@ -178,6 +138,19 @@ describe('client store', () => {
     expect(store.getState().selected).toBeNull();
   });
 
+  it('sends the host’s new seating order', async () => {
+    const t = new FakeTransport();
+    const store = createGameStore(t, memoryStore());
+    expect(await store.getState().reorderPlayers(['me', 'c', 'b'])).toBe(true);
+    expect(t.sent.at(-1)).toEqual({ event: 'room:reorder', payload: { order: ['me', 'c', 'b'] } });
+    t.replies['room:reorder'] = {
+      ok: false,
+      error: { code: 'NOT_HOST', message: 'Only the host can change the order' },
+    };
+    expect(await store.getState().reorderPlayers(['me', 'b', 'c'])).toBe(false);
+    expect(store.getState().error).toBe('Only the host can change the order');
+  });
+
   it('clears everything when the server ends the session', () => {
     const t = new FakeTransport();
     const store = createGameStore(t, memoryStore());
@@ -185,5 +158,90 @@ describe('client store', () => {
     t.listeners.onSessionEnded('replaced');
     expect(store.getState().update).toBeNull();
     expect(store.getState().notice).toMatch(/another tab/);
+  });
+
+  it('keeps the avatar between visits and sends it when creating or joining', async () => {
+    const storage = memoryStore();
+    const t = new FakeTransport();
+    const store = createGameStore(t, storage);
+    const avatar = store.getState().avatar;
+    expect(JSON.parse(storage.getItem('ace-donkey.avatar')!)).toEqual(avatar);
+    expect(createGameStore(new FakeTransport(), storage).getState().avatar).toEqual(avatar);
+
+    await store.getState().joinRoom('ABCDEF', 'Me');
+    expect(t.sent.at(-1)).toEqual({
+      event: 'room:join',
+      payload: { code: 'ABCDEF', name: 'Me', avatar },
+    });
+    await store.getState().createRoom('Me');
+    expect(t.sent.at(-1)).toEqual({ event: 'room:create', payload: { name: 'Me', avatar } });
+  });
+
+  it('sends the host controls (R23)', async () => {
+    const t = new FakeTransport();
+    const store = createGameStore(t, memoryStore());
+    await store.getState().kickPlayer('b');
+    await store.getState().setHost('b');
+    expect(t.sent.map((s) => s.event)).toEqual(['room:kick', 'room:setHost']);
+    expect(t.sent[0]!.payload).toEqual({ playerId: 'b' });
+  });
+
+  it('keeps the room chat: history, new messages without duplicates, last 100 only', async () => {
+    const t = new FakeTransport();
+    const store = createGameStore(t, memoryStore());
+    const msg = (id: number) => ({
+      id,
+      playerId: 'b',
+      name: 'Bob',
+      text: `m${id}`,
+      at: id,
+    });
+    t.listeners.onChatHistory([msg(1), msg(2)]);
+    t.listeners.onChatMessage(msg(2));
+    t.listeners.onChatMessage(msg(3));
+    expect(store.getState().chat.map((m) => m.id)).toEqual([1, 2, 3]);
+    for (let i = 4; i <= CHAT_HISTORY + 10; i++) t.listeners.onChatMessage(msg(i));
+    expect(store.getState().chat).toHaveLength(CHAT_HISTORY);
+    expect(store.getState().chat.at(-1)!.id).toBe(CHAT_HISTORY + 10);
+
+    expect(await store.getState().sendChat('   ')).toBe(false);
+    expect(await store.getState().sendChat('hi')).toBe(true);
+    expect(t.sent.at(-1)).toEqual({ event: 'chat:send', payload: { text: 'hi' } });
+  });
+
+  it('closes the results for this game only with Back to lobby', () => {
+    const t = new FakeTransport();
+    const store = createGameStore(t, memoryStore());
+    const history = [{ gameNo: 1 }] as unknown as RoomView['history'];
+    t.listeners.onUpdate(update(1, {}, { phase: 'gameOver', history }));
+    expect(store.getState().resultsClosedFor).toBeNull();
+    store.getState().backToLobby();
+    expect(store.getState().resultsClosedFor).toBe(1);
+  });
+
+  it('explains being removed by the host and clears the chat', () => {
+    const t = new FakeTransport();
+    const store = createGameStore(t, memoryStore());
+    t.listeners.onUpdate(update(1, null));
+    t.listeners.onChatMessage({ id: 1, playerId: 'b', name: 'Bob', text: 'hi', at: 1 });
+    t.listeners.onSessionEnded('kicked');
+    expect(store.getState().notice).toBe('The host removed you from the room.');
+    expect(store.getState().chat).toEqual([]);
+    expect(store.getState().update).toBeNull();
+  });
+
+  it('won’t play over a cut that is waiting to be taken (R5a)', async () => {
+    const t = new FakeTransport();
+    const store = createGameStore(t, memoryStore());
+    const pendingCut = { cutBy: 'b', pickerId: 'me' };
+    t.listeners.onUpdate(update(1, { hand: ['2C'], pendingCut, mustTake: true }));
+    expect(await store.getState().playCard('2C')).toBe(false);
+    expect(store.getState().error).toBe('Take the cards first.');
+    t.listeners.onUpdate(update(2, { hand: ['2C'], pendingCut, mustTake: false, turn: 'b' }));
+    expect(await store.getState().playCard('2C')).toBe(false);
+    expect(store.getState().error).toBe('Wait for the cut cards to be taken.');
+    expect(await store.getState().takeCards()).toBe(true);
+    expect(t.sent.at(-1)!.event).toBe('game:take');
+    expect(t.sentEvents('game:play')).toEqual([]);
   });
 });

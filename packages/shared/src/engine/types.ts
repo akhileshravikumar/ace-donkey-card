@@ -51,15 +51,28 @@ export interface GameState {
   starter: PlayerId;
   jokerId: PlayerId | null;
   jokerAces: CardId[];
+  /**
+   * R5a: a cut waits on the table until the player picking up takes the cards. While set, `turn`
+   * is the picker and the only move is `take`.
+   */
+  pendingCut: PendingCut | null;
+}
+
+export interface PendingCut {
+  cutBy: PlayerId;
+  pickerId: PlayerId;
 }
 
 export type GameAction =
   | { type: 'play'; playerId: PlayerId; card: CardId }
+  | { type: 'take'; playerId: PlayerId }
   | { type: 'giveUp'; playerId: PlayerId }
   | { type: 'remove'; playerId: PlayerId };
 
 export type GameEvent =
   | { type: 'cardPlayed'; playerId: PlayerId; card: CardId }
+  /** R5a: a cut happened; the cards stay on the table until `pickerId` takes them. */
+  | { type: 'cutPending'; cutBy: PlayerId; pickerId: PlayerId }
   | {
       type: 'roundCut';
       cutBy: PlayerId;
@@ -94,6 +107,8 @@ export type EngineErrorCode =
   | 'INVALID_CARD'
   | 'CARD_NOT_IN_HAND'
   | 'MUST_FOLLOW_SUIT'
+  | 'TAKE_CARDS_FIRST'
+  | 'NOTHING_TO_TAKE'
   | 'GIVE_UP_NOT_ALLOWED';
 
 export interface EngineError {

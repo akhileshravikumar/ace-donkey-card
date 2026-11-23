@@ -34,13 +34,45 @@ function assertSeats(seats: readonly PlayerId[]): void {
 }
 
 /**
- * R1 + R2 + E1 + E4: deal all 52 cards. The Joker (if seated and on a streak) receives their Aces,
- * which count toward a normal-sized hand. Extra cards go to randomly chosen players.
+ * R1 + R2a (dealing order): who receives each dealt card, in order.
+ * Dealing goes clockwise one card per player per round, starting at `startIndex`. The Joker is
+ * skipped for the first `skipRounds` rounds (one per Ace they already hold); from then on everyone
+ * receives a card each round until `cardCount` cards are dealt.
+ */
+export function dealSequence(
+  seats: readonly PlayerId[],
+  startIndex: number,
+  skip: { playerId: PlayerId; rounds: number } | null,
+  cardCount: number,
+): PlayerId[] {
+  const n = seats.length;
+  const order = seats.map((_, i) => seats[(startIndex + i) % n]!);
+  const sequence: PlayerId[] = [];
+  for (let round = 0; sequence.length < cardCount; round++) {
+    for (const id of order) {
+      if (sequence.length === cardCount) break;
+      if (skip && id === skip.playerId && round < skip.rounds) continue;
+      sequence.push(id);
+    }
+  }
+  return sequence;
+}
+
+/**
+ * R1 + R2 + R2a + R22 + E1: deal all 52 cards like a real dealer.
+ * - The Joker (if seated and on a streak) first receives their Aces.
+ * - The shuffled rest of the deck is dealt clockwise starting with the player after the Joker;
+ *   the Joker is skipped for as many rounds as they hold Aces, then included every round.
+ * - With no Joker (first game, after a draw, or Joker not seated) the dealer deals: the player
+ *   after the dealer gets the first card (R22 — the room's host). With no dealer given, a random
+ *   seat starts.
+ * Hand sizes differ by at most one; any extra cards go to the first players in dealing order.
  */
 export function dealHands(
   seats: readonly PlayerId[],
   joker: JokerAssignment | null,
   rng: Rng,
+  dealerId: PlayerId | null = null,
 ): { hands: Record<PlayerId, CardId[]>; jokerId: PlayerId | null; jokerAces: CardId[] } {
   assertSeats(seats);
   const jokerSeated = joker !== null && seats.includes(joker.playerId) && joker.streak > 0;
@@ -50,19 +82,18 @@ export function dealHands(
     rng,
   );
 
-  const n = seats.length;
-  const base = Math.floor(52 / n);
-  const extraSeats = new Set(shuffle(seats, rng).slice(0, 52 % n));
-
   const hands: Record<PlayerId, CardId[]> = {};
   for (const id of seats) hands[id] = jokerSeated && id === joker.playerId ? [...aces] : [];
 
-  let next = 0;
-  for (const id of seats) {
-    const hand = hands[id]!;
-    const size = base + (extraSeats.has(id) ? 1 : 0);
-    while (hand.length < size) hand.push(deck[next++]!);
-  }
+  const n = seats.length;
+  const startIndex = jokerSeated
+    ? (seats.indexOf(joker.playerId) + 1) % n
+    : dealerId !== null && seats.includes(dealerId)
+      ? (seats.indexOf(dealerId) + 1) % n
+      : rng(n);
+  const skip = jokerSeated ? { playerId: joker.playerId, rounds: aces.length } : null;
+  dealSequence(seats, startIndex, skip, deck.length).forEach((id, i) => hands[id]!.push(deck[i]!));
+
   return { hands, jokerId: jokerSeated ? joker.playerId : null, jokerAces: aces };
 }
 
@@ -94,6 +125,7 @@ export function createGameFromHands(
     starter,
     jokerId: joker.jokerId,
     jokerAces: [...joker.jokerAces],
+    pendingCut: null,
   };
 }
 
@@ -101,12 +133,15 @@ export function createGameFromHands(
 export function createGame(options: {
   seats: readonly PlayerId[];
   joker?: JokerAssignment | null;
+  /** Deals when there's no Joker (R22); the next seat gets the first card. */
+  dealerId?: PlayerId | null;
   rng: Rng;
 }): GameState {
   const { hands, jokerId, jokerAces } = dealHands(
     options.seats,
     options.joker ?? null,
     options.rng,
+    options.dealerId ?? null,
   );
   return createGameFromHands(options.seats, hands, { jokerId, jokerAces });
 }
@@ -119,10 +154,6 @@ export function activePlayers(state: GameState): PlayerId[] {
   return state.seats.filter((id) => state.status[id] === 'active');
 }
 
-export function isGameOver(state: GameState): boolean {
-  return state.result !== null;
-}
-
 /** R4: cards a hand may play given the led suit (null = leading, anything goes). */
 export function legalCardsForHand(hand: readonly CardId[], ledSuit: Suit | null): CardId[] {
   if (ledSuit === null) return [...hand];
@@ -132,8 +163,13 @@ export function legalCardsForHand(hand: readonly CardId[], ledSuit: Suit | null)
 
 /** Cards this player may play right now (empty when it isn't their turn). */
 export function playableCards(state: GameState, playerId: PlayerId): CardId[] {
-  if (state.result || state.turn !== playerId) return [];
+  if (state.result || state.pendingCut || state.turn !== playerId) return [];
   return legalCardsForHand(state.hands[playerId] ?? [], state.ledSuit);
+}
+
+/** R5a: whether this player has to take the cards of a cut before play goes on. */
+export function mustTake(state: GameState, playerId: PlayerId): boolean {
+  return !state.result && state.pendingCut?.pickerId === playerId;
 }
 
 /** R11: give-up is available to the last two active players. */
@@ -162,6 +198,15 @@ export function applyAction(state: GameState, action: GameAction): ActionResult 
       const error = play(s, action.playerId, action.card, events);
       return error ? fail(error[0], error[1]) : { ok: true, state: s, events };
     }
+    case 'take': {
+      if (!mustTake(s, action.playerId)) {
+        return fail('NOTHING_TO_TAKE', 'There are no cards for you to take');
+      }
+      const { cutBy, pickerId } = s.pendingCut!;
+      s.pendingCut = null;
+      resolveCut(s, cutBy, pickerId, events);
+      return { ok: true, state: s, events };
+    }
     case 'giveUp': {
       if (!canGiveUp(s, action.playerId)) {
         return fail('GIVE_UP_NOT_ALLOWED', 'You can only give up when two players remain');
@@ -186,6 +231,7 @@ function play(
   events: GameEvent[],
 ): [EngineErrorCode, string] | null {
   if (s.status[playerId] !== 'active') return ['NOT_ACTIVE', 'You are out of this game'];
+  if (s.pendingCut) return ['TAKE_CARDS_FIRST', 'Wait for the cut cards to be taken'];
   if (s.turn !== playerId) return ['NOT_YOUR_TURN', 'It is not your turn'];
   if (!isCardId(card)) return ['INVALID_CARD', 'Unknown card'];
   const hand = s.hands[playerId]!;
@@ -201,7 +247,7 @@ function play(
   if (s.ledSuit === null) s.ledSuit = suitOf(card);
 
   if (suitOf(card) !== s.ledSuit) {
-    resolveCut(s, playerId, events); // R5
+    startCut(s, playerId, events); // R5 + R5a
   } else if (allActivePlayed(s)) {
     resolveFold(s, events); // R6
   } else {
@@ -243,12 +289,35 @@ function ledSuitPlaysDesc(s: GameState) {
     .sort((a, b) => rankOf(b.card) - rankOf(a.card));
 }
 
-/** R5 (+E2): off-suit card ends the round; highest led-suit card among active players picks up. */
-function resolveCut(s: GameState, cutter: PlayerId, events: GameEvent[]): void {
+/** R5 (+E2): the highest led-suit card among active players picks up a cut. */
+function cutPicker(s: GameState): PlayerId | null {
+  return ledSuitPlaysDesc(s).find((t) => s.status[t.playerId] === 'active')?.playerId ?? null;
+}
+
+/**
+ * R5a: an off-suit card ends the round, but the cards stay on the table until the picker takes
+ * them. With nobody to pick up (E2) the cut resolves at once.
+ */
+function startCut(s: GameState, cutter: PlayerId, events: GameEvent[]): void {
+  const picker = cutPicker(s);
+  if (!picker) {
+    resolveCut(s, cutter, null, events);
+    return;
+  }
+  s.pendingCut = { cutBy: cutter, pickerId: picker };
+  s.turn = picker;
+  events.push({ type: 'cutPending', cutBy: cutter, pickerId: picker });
+}
+
+/** R5 (+E2): the picker picks up every table card and leads; with no picker they're discarded. */
+function resolveCut(
+  s: GameState,
+  cutter: PlayerId,
+  picker: PlayerId | null,
+  events: GameEvent[],
+): void {
   const participants = s.table.map((t) => t.playerId);
   const cards = s.table.map((t) => t.card);
-  const picker =
-    ledSuitPlaysDesc(s).find((t) => s.status[t.playerId] === 'active')?.playerId ?? null;
 
   if (picker) s.hands[picker]!.push(...cards);
   else s.discarded.push(...cards); // E2
@@ -350,7 +419,21 @@ function remove(s: GameState, playerId: PlayerId, events: GameEvent[]): void {
   });
   events.push({ type: 'playerRemoved', playerId, cardsReceived });
 
-  if (s.table.length === 0) {
+  if (s.pendingCut) {
+    // R5a + E2: if the picker left, the next-highest led-suit player still in takes over.
+    if (s.pendingCut.pickerId === playerId) {
+      const picker = cutPicker(s);
+      if (picker) {
+        s.pendingCut.pickerId = picker;
+        s.turn = picker;
+        events.push({ type: 'cutPending', cutBy: s.pendingCut.cutBy, pickerId: picker });
+      } else {
+        const { cutBy } = s.pendingCut;
+        s.pendingCut = null;
+        resolveCut(s, cutBy, null, events);
+      }
+    }
+  } else if (s.table.length === 0) {
     if (s.turn === playerId) {
       const next = nextActiveFrom(s, playerId);
       s.turn = next;
@@ -396,6 +479,7 @@ function endGame(
   s.loser = loser;
   s.turn = null;
   s.leader = null;
+  s.pendingCut = null;
   const points = computePoints(s.seats, s.placings, loser);
   s.result = { outcome, reason, points };
   events.push({

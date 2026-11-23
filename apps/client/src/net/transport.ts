@@ -5,6 +5,7 @@
 import { io, type Socket } from 'socket.io-client';
 import type {
   Ack,
+  ChatMessage,
   ClientToServerEvents,
   ServerToClientEvents,
   RoomUpdate,
@@ -24,6 +25,8 @@ export interface TransportListeners {
   onDisconnect(): void;
   onUpdate(update: RoomUpdate): void;
   onSessionEnded(reason: SessionEndReason): void;
+  onChatMessage(message: ChatMessage): void;
+  onChatHistory(messages: ChatMessage[]): void;
 }
 
 export interface Transport {
@@ -52,6 +55,8 @@ export function createSocketTransport(url: string): Transport {
       socket.on('disconnect', listeners.onDisconnect);
       socket.on('room:update', listeners.onUpdate);
       socket.on('session:ended', ({ reason }) => listeners.onSessionEnded(reason));
+      socket.on('chat:message', listeners.onChatMessage);
+      socket.on('chat:history', listeners.onChatHistory);
     },
     async send(event, payload) {
       if (!socket) throw new Error('Transport not connected');

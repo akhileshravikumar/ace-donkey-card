@@ -10,7 +10,6 @@ const RANK_CHARS = '23456789TJQKA';
 type RankChar = '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | 'T' | 'J' | 'Q' | 'K' | 'A';
 export type CardId = `${RankChar}${Suit}`;
 
-export const SUIT_SYMBOL: Record<Suit, string> = { S: '♠', H: '♥', D: '♦', C: '♣' };
 export const SUIT_NAME: Record<Suit, string> = {
   S: 'Spades',
   H: 'Hearts',
@@ -23,7 +22,6 @@ const RANK_NAME: Record<number, string> = {
   13: 'King',
   14: 'Ace',
 };
-const RANK_SHORT: Record<number, string> = { 10: '10', 11: 'J', 12: 'Q', 13: 'K', 14: 'A' };
 
 export function cardId(rank: Rank, suit: Suit): CardId {
   return `${RANK_CHARS[rank - 2]}${suit}` as CardId;
@@ -49,12 +47,6 @@ export function rankOf(card: CardId): Rank {
 /** All 52 cards in a fixed order (suit by suit, low to high). */
 export function fullDeck(): CardId[] {
   return SUITS.flatMap((suit) => RANKS.map((rank) => cardId(rank, suit)));
-}
-
-/** Short label, e.g. "Q♥", "10♣". */
-export function cardLabel(card: CardId): string {
-  const rank = rankOf(card);
-  return `${RANK_SHORT[rank] ?? String(rank)}${SUIT_SYMBOL[suitOf(card)]}`;
 }
 
 /** Accessible name, e.g. "Queen of Hearts". */

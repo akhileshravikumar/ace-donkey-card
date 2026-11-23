@@ -10,7 +10,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "concurrently -n server,client -c blue,green \"npm run dev -w @ace/server\" \"npm run dev -w @ace/client\"",
+    "dev": "concurrently -n server,client,home -c blue,green,red \"npm run dev -w @ace/server\" \"npm run dev -w @ace/client\" \"npm run dev -w @turn-tables/home\"",
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",

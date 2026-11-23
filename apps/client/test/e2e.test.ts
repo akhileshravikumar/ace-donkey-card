@@ -71,6 +71,11 @@ describe('client ↔ server', () => {
       const game = stores[0]!.getState().update!.room.game!;
       if (game.result) break;
       const mover = stores.find((s) => s.getState().session!.playerId === game.turn)!;
+      if (game.pendingCut) {
+        expect(await mover.getState().takeCards()).toBe(true);
+        await until(() => mover.getState().update!.version > version, 'ack');
+        continue;
+      }
       const playable = mover.getState().update!.room.game!.playable;
       expect(await mover.getState().playCard(playable[0]!)).toBe(true);
       await until(() => mover.getState().update!.version > version, 'ack');
@@ -80,7 +85,6 @@ describe('client ↔ server', () => {
     expect(results[0]).not.toBeNull();
     expect(results[1]).toEqual(results[0]);
     expect(results[2]).toEqual(results[0]);
-    expect(stores[0]!.getState().log.at(-1)).toMatch(/^Game over/);
     expect(stores.every((s) => s.getState().update!.room.history.length === 1)).toBe(true);
   }, 30_000);
 });

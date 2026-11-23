@@ -36,6 +36,8 @@ function playChecked(start: GameState, rng: Rng, disruption: boolean): GameState
       r = applyAction(s, { type: 'remove', playerId: active[rng(active.length)]! });
     } else if (disruption && roll < 20 && canGiveUp(s, s.turn!)) {
       r = applyAction(s, { type: 'giveUp', playerId: s.turn! });
+    } else if (s.pendingCut) {
+      r = applyAction(s, { type: 'take', playerId: s.turn! }); // R5a
     } else {
       const options = playableCards(s, s.turn!);
       r = applyAction(s, { type: 'play', playerId: s.turn!, card: options[rng(options.length)]! });
@@ -53,6 +55,11 @@ function playChecked(start: GameState, rng: Rng, disruption: boolean): GameState
           check(s.hands[id]!.length === 0, 'inactive player holds cards');
       }
       check(s.status[s.turn!] === 'active', 'turn given to an inactive player');
+      // A waiting cut (R5a) belongs to the player to move, and nobody can play over it.
+      if (s.pendingCut) {
+        check(s.turn === s.pendingCut.pickerId, 'turn is not the picker during a cut');
+        check(playableCards(s, s.turn!).length === 0, 'cards playable during a cut');
+      }
       // Out-of-turn plays are always rejected (sampled to keep the run fast).
       if (step % 7 === 0) {
         const notTurn = s.seats.find((id) => id !== s.turn && s.status[id] === 'active');
@@ -111,11 +118,13 @@ describe('engine properties (random full games)', () => {
         let s = createGame({ seats: seatsFor(n), rng });
         for (let i = 0; i < 15 && !s.result; i++) {
           const options = playableCards(s, s.turn!);
-          const r = applyAction(s, {
-            type: 'play',
-            playerId: s.turn!,
-            card: options[rng(options.length)]!,
-          });
+          const r = s.pendingCut
+            ? applyAction(s, { type: 'take', playerId: s.turn! })
+            : applyAction(s, {
+                type: 'play',
+                playerId: s.turn!,
+                card: options[rng(options.length)]!,
+              });
           if (!r.ok) throw new Error(r.error.code);
           s = r.state;
         }

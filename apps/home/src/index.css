@@ -1,0 +1,41 @@
+@import 'tailwindcss';
+
+/*
+ * Sizes come straight from the 1920px-wide wireframe: `h-160` is 160 wireframe pixels.
+ * --u scales one wireframe pixel to the screen (1px at 1920px wide, never below 0.6px).
+ */
+@theme {
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Inter, Roboto, ui-sans-serif,
+    sans-serif;
+
+  --spacing: var(--u);
+
+  --text-nav: calc(var(--u) * 48);
+  --text-title: calc(var(--u) * 48);
+  --text-join: calc(var(--u) * 40);
+  --text-card: calc(var(--u) * 30);
+  --text-code: calc(var(--u) * 30);
+  --text-popup: calc(var(--u) * 32);
+
+  --radius-bar: calc(var(--u) * 50);
+  --radius-pill: calc(var(--u) * 25);
+  --radius-dialog: calc(var(--u) * 55);
+
+  --color-bar: #d9d9d9; /* top bar, cards, Join Game button, popup backdrop */
+  --color-thumb: #a6a6a6; /* game image placeholder */
+  --color-dialog: #a4a4a4;
+  --color-button: #414141;
+}
+
+@layer base {
+  :root {
+    --u: clamp(0.6px, calc(100vw / 1920), 1px);
+  }
+  body {
+    @apply bg-white font-sans text-black antialiased;
+  }
+  button:not(:disabled) {
+    cursor: pointer;
+  }
+}

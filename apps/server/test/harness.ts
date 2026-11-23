@@ -1,6 +1,7 @@
 import { io as connect, type Socket } from 'socket.io-client';
 import type {
   Ack,
+  ChatMessage,
   ClientToServerEvents,
   JoinedPayload,
   RoomUpdate,
@@ -39,6 +40,7 @@ export class Bot {
   updates = 0;
   ended: string | null = null;
   joined: JoinedPayload | null = null;
+  chat: ChatMessage[] = [];
 
   constructor(url: string) {
     this.socket = connect(url, { transports: ['websocket'], forceNew: true, reconnection: false });
@@ -47,6 +49,8 @@ export class Bot {
       this.updates++;
     });
     this.socket.on('session:ended', ({ reason }) => (this.ended = reason));
+    this.socket.on('chat:history', (messages) => (this.chat = [...messages]));
+    this.socket.on('chat:message', (message) => this.chat.push(message));
   }
 
   emit<E extends keyof ClientToServerEvents>(
@@ -118,13 +122,18 @@ export async function roomOf(n: number, server: TestServer): Promise<Bot[]> {
   return bots;
 }
 
-/** Each bot plays a random playable card on its turn until the game ends. */
+/** Each bot plays a random playable card on its turn (taking cut cards, R5a) until the game ends. */
 export async function playOut(bots: Bot[], server: TestServer, maxMoves = 2000): Promise<void> {
   for (let i = 0; i < maxMoves; i++) {
     await synced(bots, server);
     const game = bots[0]!.game;
     if (game.result) return;
     const mover = bots.find((b) => b.room.you === game.turn)!;
+    if (mover.game.mustTake) {
+      const ack = await mover.emit('game:take', { actionId: `t${i}-${Math.random()}` });
+      if (!ack.ok) throw new Error(`take rejected: ${ack.error.code}`);
+      continue;
+    }
     const playable = mover.game.playable;
     const card = playable[Math.floor(Math.random() * playable.length)]!;
     const ack = await mover.emit('game:play', { card, actionId: `m${i}-${Math.random()}` });

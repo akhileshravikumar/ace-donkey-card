@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { CardId } from '@ace/shared';
-import { describeEvent, ordinal } from '../src/lib/describe';
 import { mergeHandOrder, moveCard, sortBySuit } from '../src/lib/hand';
+import { offset, tableShape } from '../src/lib/tableGeometry';
+import { playerStats } from '../src/lib/stats';
+import { cycle, loadAvatar, randomAvatar } from '../src/lib/avatar';
+import { memoryStore, player, record, roomView } from './helpers';
 
 const c = (...ids: string[]) => ids as CardId[];
 
@@ -22,78 +25,82 @@ describe('hand order', () => {
   });
 });
 
-describe('event descriptions', () => {
-  const names: Record<string, string> = { a: 'Ann', b: 'Bob', c: 'Cat' };
-  const nameOf = (id: string) => names[id] ?? '?';
-
-  it('formats ordinals', () => {
-    expect([1, 2, 3, 4, 11, 12, 13, 21, 22].map(ordinal)).toEqual([
-      '1st',
-      '2nd',
-      '3rd',
-      '4th',
-      '11th',
-      '12th',
-      '13th',
-      '21st',
-      '22nd',
-    ]);
+describe('table shape', () => {
+  it('has one side per player with a flat bottom edge for you', () => {
+    for (const n of [3, 4, 5, 6, 7]) {
+      const shape = tableShape(n, 450, 300, 330, 262);
+      expect(shape.vertices).toHaveLength(n);
+      expect(shape.edgeMidpoints).toHaveLength(n);
+      expect(shape.seatAngles[0]).toBe(90);
+      // Edge 0 is horizontal and at the bottom.
+      const [a, b] = [shape.vertices[n - 1]!, shape.vertices[0]!];
+      expect(a.y).toBeCloseTo(b.y);
+      expect(Math.max(...shape.vertices.map((v) => v.y))).toBeCloseTo(a.y);
+      // Seats go clockwise: bottom, then left side, …
+      expect(shape.edgeMidpoints[1]!.x).toBeLessThan(450);
+      // The shape fills the box height.
+      const ys = shape.vertices.map((v) => v.y);
+      expect(Math.max(...ys) - Math.min(...ys)).toBeCloseTo(524);
+    }
   });
 
-  it('describes every event type in plain language', () => {
-    expect(describeEvent({ type: 'cardPlayed', playerId: 'a', card: 'QH' }, nameOf)).toBe(
-      'Ann played Q♥',
-    );
-    expect(
-      describeEvent(
-        {
-          type: 'roundCut',
-          cutBy: 'b',
-          pickedUpBy: 'a',
-          cards: c('2H', 'QH', '3S'),
-          nextLeader: 'a',
-        },
-        nameOf,
-      ),
-    ).toBe('Bob cut the suit — Ann picks up 3 cards');
-    expect(
-      describeEvent({ type: 'roundFolded', cards: c('2H', 'QH'), nextLeader: 'c' }, nameOf),
-    ).toBe('Everyone followed suit — cards folded; Cat leads');
-    expect(
-      describeEvent({ type: 'playersFinished', playerIds: ['a', 'b'], place: 1 }, nameOf),
-    ).toBe('Ann and Bob finished 1st (tied)');
-    expect(describeEvent({ type: 'playerGaveUp', playerId: 'c' }, nameOf)).toBe('Cat gave up');
-    expect(
-      describeEvent(
-        { type: 'playerRemoved', playerId: 'c', cardsReceived: { a: 2, b: 1 } },
-        nameOf,
-      ),
-    ).toBe('Cat left the game — their 3 cards were dealt to the others');
-    expect(
-      describeEvent(
-        {
-          type: 'gameOver',
-          outcome: 'normal',
-          reason: 'lastPlayer',
-          loser: 'b',
-          placings: [],
-          points: {},
-        },
-        nameOf,
-      ),
-    ).toBe('Game over — Bob is the Donkey');
-    expect(
-      describeEvent(
-        {
-          type: 'gameOver',
-          outcome: 'draw',
-          reason: 'draw',
-          loser: null,
-          placings: [],
-          points: {},
-        },
-        nameOf,
-      ),
-    ).toContain('draw');
+  it('keeps triangles and squares regular', () => {
+    const sq = tableShape(4, 0, 0, 330, 262).vertices;
+    const side = (p: { x: number; y: number }, q: { x: number; y: number }) =>
+      Math.hypot(p.x - q.x, p.y - q.y);
+    expect(side(sq[0]!, sq[1]!)).toBeCloseTo(side(sq[1]!, sq[2]!));
+    const tri = tableShape(3, 0, 0, 330, 262).vertices;
+    expect(side(tri[0]!, tri[1]!)).toBeCloseTo(side(tri[1]!, tri[2]!));
+    expect(side(tri[0]!, tri[1]!)).toBeCloseTo(side(tri[2]!, tri[0]!));
+  });
+
+  it('points each seat straight out from its edge', () => {
+    const shape = tableShape(5, 450, 300, 330, 262);
+    shape.seatAngles.forEach((angle, i) => {
+      const p = shape.vertices[(i + 4) % 5]!;
+      const q = shape.vertices[i]!;
+      const out = offset({ x: 0, y: 0 }, angle, 1);
+      expect(out.x * (q.x - p.x) + out.y * (q.y - p.y)).toBeCloseTo(0);
+    });
+  });
+});
+
+describe('scoreboard stats', () => {
+  it('counts points, games not lost, losses and the current streak’s Aces', () => {
+    const seats = ['me', 'bob', 'cleo'];
+    const room = roomView({
+      players: [player('me'), player('bob', { streak: 0 }), player('cleo', { streak: 3 })],
+      history: [
+        record({ seats, loser: 'bob', points: { me: 2, cleo: 1 } }),
+        record({ seats, loser: 'cleo', points: { me: 1, bob: 2 } }),
+        record({ seats: ['me', 'cleo'], loser: 'cleo', points: { me: 1 }, removed: ['bob'] }),
+        record({ seats, loser: 'cleo', points: { me: 1, bob: 2 }, removed: [] }),
+      ],
+    });
+    expect(playerStats(room, 'me')).toEqual({ points: 5, wins: 4, losses: 0, aces: [] });
+    expect(playerStats(room, 'bob')).toMatchObject({ points: 4, wins: 2, losses: 1 });
+    expect(playerStats(room, 'cleo')).toMatchObject({ points: 1, wins: 1, losses: 3 });
+    expect(playerStats(room, 'cleo').aces).toEqual(['AS', 'AC', 'AD']);
+  });
+});
+
+describe('avatar', () => {
+  it('cycles options both ways and wraps around', () => {
+    expect(cycle(0, -1, 4)).toBe(3);
+    expect(cycle(3, 1, 4)).toBe(0);
+    expect(cycle(1, 1, 3)).toBe(2);
+  });
+
+  it('picks random parts within range', () => {
+    expect(randomAvatar(() => 0)).toEqual({ face: 0, glasses: 0, mouth: 0 });
+    expect(randomAvatar(() => 0.999)).toEqual({ face: 5, glasses: 3, mouth: 2 });
+  });
+
+  it('replaces a saved avatar from the old 3-part format', () => {
+    const storage = memoryStore();
+    storage.setItem('ace-donkey.avatar', JSON.stringify({ glasses: 1, eyes: 2, mouth: 0 }));
+    const avatar = loadAvatar(storage);
+    expect(Object.keys(avatar).sort()).toEqual(['face', 'glasses', 'mouth']);
+    expect(JSON.parse(storage.getItem('ace-donkey.avatar')!)).toEqual(avatar);
   });
 });
